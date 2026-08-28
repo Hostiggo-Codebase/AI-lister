@@ -5,6 +5,7 @@ type PlaywrightPage = {
   goto(url: string, opts: { waitUntil: string; timeout: number }): Promise<unknown>;
   evaluate(fn: () => unknown): Promise<unknown>;
   waitForTimeout(ms: number): Promise<void>;
+  waitForFunction(fn: () => unknown, arg?: unknown, opts?: { timeout: number }): Promise<unknown>;
   content(): Promise<string>;
   url(): string;
 };
@@ -54,16 +55,36 @@ export async function tier2Scrape(url: string): Promise<Tier2Result> {
       viewport: { width: 1366, height: 900 },
     });
     const pw = await ctx.newPage();
-    await pw.goto(url, { waitUntil: "networkidle", timeout: env.fetchTimeoutMs * 2 });
-    // Trigger lazy-loaded galleries.
+    // Airbnb/Booking hold long-poll connections open, so "networkidle" never
+    // fires — wait for the DOM, then settle with explicit waits below.
+    await pw.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: Math.max(45_000, env.fetchTimeoutMs * 3),
+    });
+    await pw.waitForTimeout(1500);
+    // Trigger lazy-loaded galleries + let post-render API calls (price, amenities) land.
     await pw.evaluate(async () => {
-      for (let y = 0; y < document.body.scrollHeight; y += 800) {
+      for (let y = 0; y < document.body.scrollHeight; y += 700) {
         window.scrollTo(0, y);
-        await new Promise((r) => setTimeout(r, 150));
+        await new Promise((r) => setTimeout(r, 200));
       }
       window.scrollTo(0, 0);
+      // Best-effort: open an "amenities" disclosure so its list enters the DOM.
+      const btn = [...document.querySelectorAll("button,a")].find((b) =>
+        /show all \d+ amenities|all amenities/i.test(b.textContent || ""),
+      );
+      (btn as HTMLElement | undefined)?.click();
+      await new Promise((r) => setTimeout(r, 600));
     });
-    await pw.waitForTimeout(800);
+    // Wait (briefly) for a currency-prefixed price to appear anywhere on the page.
+    await pw
+      .waitForFunction(
+        () => /(?:₹|Rs\.?|\$|€|£)\s?\d[\d,]{2,}/.test(document.body.innerText),
+        undefined,
+        { timeout: 6000 },
+      )
+      .catch(() => {});
+    await pw.waitForTimeout(500);
     const html = await pw.content();
     const finalUrl = pw.url();
     return { ok: true, page: parseHtml(html, finalUrl, 200) };

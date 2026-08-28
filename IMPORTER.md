@@ -8,9 +8,13 @@ fields, no re-uploading photos.
 
 ```bash
 npm install
+npm run setup:tier2   # one-time: installs the Chromium binary for the Tier 2 scraper
 npm run dev
 # open http://localhost:3000/import-tester
 ```
+
+`npm run setup:tier2` is optional — without it the pipeline still runs, it just
+can't fall back to a headless render (needed for Airbnb/Booking price + amenities).
 
 With **no environment variables set**, the playground runs fully offline:
 
@@ -44,7 +48,7 @@ then polls `GET /api/import/jobs/:id` every 1.5 s.
 |---|---|---|
 | `tier1_fetch` | `tier1.ts` | plain `fetch` w/ browser UA → parse JSON-LD, OpenGraph, meta, `__NEXT_DATA__`, `<img>` src/srcset, visible-text excerpt |
 | `truncation_check` | `truncation.ts` | scores bot-walls, tiny docs, missing structured data / images / price → decides if Tier 2 is needed |
-| `tier2_scrape` | `tier2.ts` | Playwright Chromium, `networkidle` + scroll for lazy images. **Optional dep** — degrades to Tier 1 content if not installed |
+| `tier2_scrape` | `tier2.ts` | Playwright Chromium: `domcontentloaded` + scroll + wait for a price to render + open the amenities disclosure. Recovers price / full amenities / room counts that JS-heavy sites (Airbnb, Booking) never put in the initial HTML. Degrades to Tier 1 content if Playwright isn't installed |
 | `llm_extract` | `llm.ts` | Anthropic `claude-sonnet-5` with `emit_listing_draft` tool = strict JSON Schema (`LISTING_DRAFT_JSON_SCHEMA`). Falls back to heuristic extractor without a key |
 | `validate` | `schema.ts` | `validateDraft()` — coerce price/currency, clamp lat/lng & counts, map amenities to the Hostiggo enum, dedupe + de-track photo URLs, cap at `IMPORT_MAX_PHOTOS`. Emits a per-field report (`ok` / `coerced` / `clamped` / `dropped` / `missing`) |
 | `photo_mirror` | `photos.ts` | download each photo (type/size/count caps, bounded concurrency) → Supabase Storage bucket `listing-imports` (or local dir) |
