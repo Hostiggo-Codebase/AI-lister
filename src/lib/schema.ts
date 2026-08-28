@@ -406,10 +406,25 @@ export function validateDraft(raw: RawExtraction): {
       continue;
     }
     u.protocol = "https:";
+    // Drop UI chrome / avatars / icons that leak in from the page scrape.
+    if (
+      /(platform-assets|platformassets|search-bar-icons|userprofile|user_|profile_|avatar|[/-]icons?[/-]|sprite|[/-]logo|maps\.googleapis|pinimg|fbcdn)/i.test(
+        u.href,
+      )
+    ) {
+      add(`photos["${u.pathname.split("/").pop()}"]`, "dropped", "non-listing asset");
+      dropped++;
+      continue;
+    }
     for (const k of [...u.searchParams.keys()])
       if (/^(w|h|width|height|quality|q|im_|_|aki_policy|cs|impolicy)/i.test(k))
         u.searchParams.delete(k);
-    const key = u.origin + u.pathname;
+    // Airbnb serves the same photo under two path prefixes but a stable trailing
+    // UUID — dedupe on that; otherwise dedupe on origin+path.
+    const uuid = u.pathname.match(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+    );
+    const key = uuid ? uuid[0].toLowerCase() : u.origin + u.pathname;
     if (photoSeen.has(key)) continue;
     photoSeen.add(key);
     photos.push({ url: u.toString(), caption });

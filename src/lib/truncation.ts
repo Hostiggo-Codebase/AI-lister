@@ -38,7 +38,22 @@ export function detectTruncation(page: ParsedPage): TruncationVerdict {
         /Hotel|Lodging|Product|Place|Accommodation|Apartment|House|Room/i.test(
           String((x as Record<string, unknown>)["@type"] ?? ""),
         ),
-    ) || page.nextData != null;
+    ) ||
+    page.nextData != null ||
+    page.embeddedJson.length > 0;
+
+  // Structured data present but none of the money/occupancy facts surfaced —
+  // they're probably locked behind client-side rendering.
+  const h = page.hints;
+  if (
+    structured &&
+    h.priceCandidates.length === 0 &&
+    h.personCapacity == null &&
+    !PRICE_HINT.test(page.textExcerpt)
+  ) {
+    reasons.push("structured data has no price / capacity — likely JS-rendered");
+    score += 2;
+  }
 
   if (!structured) {
     if (Object.keys(page.openGraph).length < 3) {

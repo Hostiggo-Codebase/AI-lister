@@ -16,11 +16,15 @@ Rules:
 - Use ONLY information present in the provided content. Never invent amenities, prices, coordinates, or addresses.
 - If a value is not present, omit it or use null. Do not guess.
 - "description" should be the host's full property description, cleaned of navigation/boilerplate.
-- "photos" must be direct image URLs found in the content (og:image, gallery <img> src/srcset, JSON-LD image arrays).
-- Prices: report the nightly rate and its ISO-4217 currency (INR for ₹/Rs).
+- "photos" must be direct image URLs found in the content (og:image, gallery <img> src/srcset, JSON-LD image arrays, or the EMBEDDED STATE JSON). Exclude UI icons, avatars, map tiles and "platform-assets" images.
+- Prices: report the nightly rate and its ISO-4217 currency (INR for ₹/Rs). The nightly rate is the smallest per-night figure — not a multi-night total or a figure that includes fees.
+- Mine the EMBEDDED STATE JSON for price, guest capacity, bedrooms, beds, bathrooms, coordinates, city and the amenities list when the visible text does not contain them. PRE-EXTRACTED HINTS is a best-effort parse of that JSON — treat it as a starting point, not ground truth.
 - Return your answer by calling the "emit_listing_draft" tool.`;
 
 function buildContent(page: ParsedPage, provider: Provider): string {
+  const embedded = page.embeddedJson.length
+    ? JSON.stringify(page.embeddedJson).slice(0, 60000)
+    : "";
   return [
     `PROVIDER: ${provider}`,
     `PAGE TITLE: ${page.title ?? ""}`,
@@ -29,11 +33,12 @@ function buildContent(page: ParsedPage, provider: Provider): string {
       description: page.meta.description,
       keywords: page.meta.keywords,
     })}`,
-    `JSON-LD: ${JSON.stringify(page.jsonLd).slice(0, 12000)}`,
-    page.nextData
-      ? `EMBEDDED STATE (truncated): ${JSON.stringify(page.nextData).slice(0, 12000)}`
-      : "",
-    `CANDIDATE IMAGE URLS: ${JSON.stringify(page.imageUrls.slice(0, 60))}`,
+    `JSON-LD: ${JSON.stringify(page.jsonLd).slice(0, 20000)}`,
+    `PRE-EXTRACTED HINTS (from embedded JSON — verify before trusting): ${JSON.stringify(
+      page.hints,
+    )}`,
+    embedded ? `EMBEDDED STATE JSON (truncated): ${embedded}` : "",
+    `CANDIDATE IMAGE URLS: ${JSON.stringify(page.imageUrls.slice(0, 80))}`,
     `VISIBLE TEXT (truncated): ${page.textExcerpt}`,
   ]
     .filter(Boolean)
@@ -53,7 +58,7 @@ export async function extractListing(
   const client = new Anthropic({ apiKey: env.anthropicKey });
   const msg = await client.messages.create({
     model,
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: SYSTEM,
     tools: [
       {
@@ -98,22 +103,28 @@ function mockExtract(page: ParsedPage): { raw: RawExtraction; warnings: string[]
       ),
   );
   const text = page.textExcerpt;
+  const h = page.hints;
 
-  const priceMatch =
+  // Prefer the smallest sane price candidate harvested from embedded JSON
+  // (that's usually the nightly rate rather than a multi-night total).
+  const priceCand = [...h.priceCandidates].sort((a, b) => a.amount - b.amount)[0];
+  const textPrice =
     text.match(/(?:₹|Rs\.?|INR)\s?([\d,]{3,})/i) ||
-    text.match(/\$\s?([\d,]{2,})/) ||
     text.match(/([\d,]{3,})\s*(?:per night|\/ ?night|a night)/i);
-  const currency = priceMatch
-    ? /\$/.test(priceMatch[0])
-      ? "USD"
-      : "INR"
-    : "INR";
+  const nightly = priceCand?.amount ?? (textPrice ? Number(textPrice[1].replace(/,/g, "")) : null);
+  const currency = priceCand?.currency ?? "INR";
 
-  const guestsMatch = text.match(/(\d+)\s*guests?/i);
-  const bedroomsMatch = text.match(/(\d+)\s*bedrooms?/i);
-  const bedsMatch = text.match(/(\d+)\s*beds?/i);
-  const bathMatch = text.match(/(\d+(?:\.\d)?)\s*(?:bath|bathrooms?)/i);
+  const numOrNull = (v: string | undefined) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const guests = h.personCapacity ?? numOrNull(text.match(/(\d+)\s*guests?/i)?.[1]);
+  const bedrooms = h.bedrooms ?? numOrNull(text.match(/(\d+)\s*bedrooms?/i)?.[1]);
+  const beds = h.beds ?? numOrNull(text.match(/(\d+)\s*beds?/i)?.[1]);
+  const bathrooms =
+    h.bathrooms ?? numOrNull(text.match(/(\d+(?:\.\d)?)\s*(?:bath|bathrooms?)/i)?.[1]);
 
+  const amenityHaystack = (h.amenityNames.join(" ") + " " + text).toLowerCase();
   const amenityHits = [
     "wifi",
     "air conditioning",
@@ -121,15 +132,22 @@ function mockExtract(page: ParsedPage): { raw: RawExtraction; warnings: string[]
     "free parking",
     "pool",
     "washer",
+    "dryer",
     "tv",
     "breakfast",
     "geyser",
+    "hot water",
     "power backup",
     "balcony",
     "garden",
     "mountain view",
+    "sea view",
+    "workspace",
+    "elevator",
     "pets allowed",
-  ].filter((a) => new RegExp(a.replace(/ /g, "[ -]?"), "i").test(text));
+    "self check",
+    "smoke alarm",
+  ].filter((a) => new RegExp(a.replace(/ /g, "[ -]?"), "i").test(amenityHaystack));
 
   const ldImages = ld?.image
     ? (Array.isArray(ld.image) ? ld.image : [ld.image]).map(String)
@@ -171,27 +189,27 @@ function mockExtract(page: ParsedPage): { raw: RawExtraction; warnings: string[]
           : "entire_place",
       address: {
         line: (addr.streetAddress as string) ?? null,
-        city: (addr.addressLocality as string) ?? null,
+        city: (addr.addressLocality as string) ?? h.city ?? null,
         state: (addr.addressRegion as string) ?? null,
         country: (addr.addressCountry as string) ?? "India",
         postal_code: (addr.postalCode as string) ?? null,
       },
       location: {
-        lat: geo.latitude != null ? Number(geo.latitude) : null,
-        lng: geo.longitude != null ? Number(geo.longitude) : null,
+        lat: geo.latitude != null ? Number(geo.latitude) : h.lat,
+        lng: geo.longitude != null ? Number(geo.longitude) : h.lng,
       },
       capacity: {
-        max_guests: guestsMatch ? Number(guestsMatch[1]) : 2,
-        bedrooms: bedroomsMatch ? Number(bedroomsMatch[1]) : null,
-        beds: bedsMatch ? Number(bedsMatch[1]) : null,
-        bathrooms: bathMatch ? Number(bathMatch[1]) : null,
+        max_guests: guests ?? 2,
+        bedrooms,
+        beds,
+        bathrooms,
       },
       pricing: {
-        nightly_amount: priceMatch
-          ? Number(priceMatch[1].replace(/,/g, ""))
-          : (ld?.priceRange as string | undefined)?.match(/\d+/)?.[0]
+        nightly_amount:
+          nightly ??
+          ((ld?.priceRange as string | undefined)?.match(/\d+/)?.[0]
             ? Number((ld!.priceRange as string).match(/\d+/)![0])
-            : null,
+            : null),
         currency,
         cleaning_fee: null,
         weekly_discount_pct: null,
