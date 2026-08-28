@@ -1,0 +1,22 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+  # optional dedicated worker (the API also runs in-process workers).
+  # scale this instead if you want to separate API and pipeline load.
+  worker:
+    build: .
+    env_file:
+      - .env
+    environment:
+      IMPORT_WORKER_CONCURRENCY: "4"
+    command: python -m app.worker
+    restart: unless-stopped
+    deploy:
+      replicas: 0
