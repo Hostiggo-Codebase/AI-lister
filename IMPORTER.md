@@ -51,16 +51,40 @@ then polls `GET /api/import/jobs/:id` every 1.5 s.
 | `tier2_scrape` | `tier2.ts` | Playwright Chromium: `domcontentloaded` + scroll + wait for a price to render + open the amenities disclosure. Recovers price / full amenities / room counts that JS-heavy sites (Airbnb, Booking) never put in the initial HTML. Degrades to Tier 1 content if Playwright isn't installed |
 | `llm_extract` | `llm.ts` | Anthropic `claude-sonnet-5` with `emit_listing_draft` tool = strict JSON Schema (`LISTING_DRAFT_JSON_SCHEMA`). Falls back to heuristic extractor without a key |
 | `validate` | `schema.ts` | `validateDraft()` — coerce price/currency, clamp lat/lng & counts, map amenities to the Hostiggo enum, dedupe + de-track photo URLs, cap at `IMPORT_MAX_PHOTOS`. Emits a per-field report (`ok` / `coerced` / `clamped` / `dropped` / `missing`) |
+| `fx_convert` | `fx.ts` | convert the nightly rate to INR (static rate table); records `source_currency` + `fx_rate` on the job. Unknown currency → price left null for the host |
+| `coverage` | `fieldCoverage.ts` + `recommendations.ts` | score the draft against the 15-row Hostiggo onboarding flow (`auto` / `partial` / `manual` / `missing`, which are required to publish, `% pre-filled`); build the rule-based listing-improvement tips |
 | `photo_mirror` | `photos.ts` | download each photo (type/size/count caps, bounded concurrency) → Supabase Storage bucket `listing-imports` (or local dir) |
 
 `commit` re-runs `validateDraft` on whatever the host edited so nothing
 unvalidated reaches the database, then writes `listings` + `listing_photos`.
 
+### Multi-listing (host profile) import
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/import/profile` `{url}` | crawl a host-profile / search / wishlist URL (Tier 1 → Tier 2), return every discovered listing URL + id (+ title/thumbnail where present) |
+| `POST /api/import/batch` `{urls[], consent, options}` | dedupe by external listing id, create one job per listing under an `import_batch` |
+| `GET /api/import/batch/:id` | batch + per-listing status / tier / ₹ / photos / coverage % / tip count |
+| `POST /api/import/worker` `{all:true, max}` | drain the queue (batch runner) |
+
+### iCal availability feeds
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/import/jobs/:id/ical` `{url}` | fetch + parse an iCal export (`ical.ts`, no dependency), classify events reserved / blocked, flatten to `blocked_dates[]`, store on the job |
+| `DELETE /api/import/jobs/:id/ical` | detach |
+
+On commit these become `listing_ical_feeds` rows; a scheduled job re-pulls them.
+
 ## Database
 
-`supabase/migrations/0001_import_pipeline.sql` — `import_jobs`, `import_photos`,
-`listings`, `listing_photos`, the `listing-imports` storage bucket, and RLS
-(service-role for the API routes; hosts see only their own rows).
+- `0001_import_pipeline.sql` — `import_jobs`, `import_photos`, `listings`,
+  `listing_photos`, the `listing-imports` storage bucket, RLS.
+- `0002_batches_coverage_ical.sql` — `import_batches`, `listing_ical_feeds`,
+  the `fx` / `coverage` / `recommendations` / `ical` / `batch_id` columns on
+  `import_jobs`, and the provenance columns from the brainstorm doc
+  (`listings.source`, `import_id`, `external_url`, `external_listing_id`,
+  `import_confirmed_by_host`).
 
 ```bash
 supabase db push

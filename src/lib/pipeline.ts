@@ -5,6 +5,9 @@ import { tier2Scrape } from "./tier2";
 import { extractListing } from "./llm";
 import { validateDraft } from "./schema";
 import { mirrorPhotos } from "./photos";
+import { toINR } from "./fx";
+import { computeCoverage } from "./fieldCoverage";
+import { buildRecommendations } from "./recommendations";
 import type { ImportJob, LogEntry, Stage } from "./types";
 
 async function runStage<T>(
@@ -93,6 +96,34 @@ export async function runPipeline(job: ImportJob): Promise<ImportJob> {
       validated_draft: draft,
       validation_report: report,
     });
+
+    // ---- FX -> INR ---------------------------------------------
+    const fx = await runStage(job, "fx_convert", logs, async (log) => {
+      const conv = toINR(draft.pricing.nightly_amount, draft.pricing.currency);
+      if (conv.inr_amount != null && conv.source_currency !== "INR") {
+        draft.pricing.nightly_amount = conv.inr_amount;
+        draft.pricing.currency = "INR";
+        log("info", conv.note ?? "");
+      } else if (conv.rate_source === "unknown") {
+        log("warn", conv.note ?? `no FX rate for ${conv.source_currency}`);
+      } else {
+        log("info", "price already INR / nothing to convert");
+      }
+      return conv;
+    });
+    await store.updateJob(job.id, { fx, validated_draft: draft });
+
+    // ---- Coverage + recommendations ----------------------------
+    const { coverage, recommendations } = await runStage(job, "coverage", logs, async (log) => {
+      const cov = computeCoverage(draft, fx, job.consent);
+      const recs = buildRecommendations(draft);
+      log(
+        "info",
+        `${cov.summary.percent_prefilled}% pre-filled · ${cov.summary.required_unresolved} required field(s) unresolved · ${recs.length} recommendation(s)`,
+      );
+      return { coverage: cov, recommendations: recs };
+    });
+    await store.updateJob(job.id, { coverage, recommendations });
 
     // ---- Photo mirroring ----------------------------------------
     if (!opts.skipPhotoMirror) {

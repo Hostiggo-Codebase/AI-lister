@@ -1,5 +1,9 @@
 import type { Provider } from "./providers";
 import type { RawExtraction, ValidatedDraft, FieldNote } from "./schema";
+import type { FxConversion } from "./fx";
+import type { Coverage } from "./fieldCoverage";
+import type { Recommendation } from "./recommendations";
+import type { IcalFeed } from "./ical";
 
 export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "committed";
 
@@ -10,6 +14,8 @@ export type Stage =
   | "tier2_scrape"
   | "llm_extract"
   | "validate"
+  | "fx_convert"
+  | "coverage"
   | "photo_mirror"
   | "done";
 
@@ -41,8 +47,10 @@ export type ImportOptions = {
 
 export type ImportJob = {
   id: string;
+  batch_id: string | null;
   host_id: string | null;
   source_url: string;
+  external_listing_id: string | null;
   provider: Provider;
   consent: boolean;
   status: JobStatus;
@@ -56,6 +64,10 @@ export type ImportJob = {
   raw_extraction: RawExtraction | null;
   validated_draft: ValidatedDraft | null;
   validation_report: FieldNote[];
+  fx: FxConversion | null;
+  coverage: Coverage | null;
+  recommendations: Recommendation[];
+  ical: IcalFeed | null;
   photos: MirroredPhoto[];
   logs: LogEntry[];
   error: string | null;
@@ -70,4 +82,15 @@ export type NewJobInput = {
   consent: boolean;
   host_id?: string | null;
   options?: ImportOptions;
+  batch_id?: string | null;
+  external_listing_id?: string | null;
+};
+
+export type ImportBatch = {
+  id: string;
+  source_url: string;
+  provider: Provider;
+  host_name: string | null;
+  job_ids: string[];
+  created_at: string;
 };

@@ -3,8 +3,9 @@ import path from "path";
 import { randomUUID } from "crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { env, hasSupabase } from "./env";
-import type { ImportJob, NewJobInput } from "./types";
+import type { ImportJob, NewJobInput, ImportBatch } from "./types";
 import type { ValidatedDraft } from "./schema";
+import type { Provider } from "./providers";
 
 /* ------------------------------------------------------------------ *
  * Storage abstraction: Supabase when configured, else in-process.    *
@@ -17,6 +18,14 @@ export interface Store {
   listJobs(limit?: number): Promise<ImportJob[]>;
   updateJob(id: string, patch: Partial<ImportJob>): Promise<ImportJob>;
   claimNextQueued(): Promise<ImportJob | null>;
+  createBatch(input: {
+    source_url: string;
+    provider: Provider;
+    host_name: string | null;
+    job_ids: string[];
+  }): Promise<ImportBatch>;
+  getBatch(id: string): Promise<ImportBatch | null>;
+  listBatches(limit?: number): Promise<ImportBatch[]>;
   putPhoto(
     jobId: string,
     idx: number,
@@ -31,8 +40,10 @@ const now = () => new Date().toISOString();
 function blankJob(input: NewJobInput): ImportJob {
   return {
     id: randomUUID(),
+    batch_id: input.batch_id ?? null,
     host_id: input.host_id ?? null,
     source_url: input.source_url,
+    external_listing_id: input.external_listing_id ?? null,
     provider: input.provider,
     consent: input.consent,
     status: "queued",
@@ -46,6 +57,10 @@ function blankJob(input: NewJobInput): ImportJob {
     raw_extraction: null,
     validated_draft: null,
     validation_report: [],
+    fx: null,
+    coverage: null,
+    recommendations: [],
+    ical: null,
     photos: [],
     logs: [],
     error: null,
@@ -57,9 +72,17 @@ function blankJob(input: NewJobInput): ImportJob {
 
 /* ----------------------------- memory ----------------------------- */
 
-type MemDB = { jobs: Map<string, ImportJob>; listings: Map<string, unknown> };
+type MemDB = {
+  jobs: Map<string, ImportJob>;
+  listings: Map<string, unknown>;
+  batches: Map<string, ImportBatch>;
+};
 const g = globalThis as unknown as { __hostiggoDB?: MemDB };
-const mem: MemDB = (g.__hostiggoDB ??= { jobs: new Map(), listings: new Map() });
+const mem: MemDB = (g.__hostiggoDB ??= {
+  jobs: new Map(),
+  listings: new Map(),
+  batches: new Map(),
+});
 
 const MIRROR_DIR = path.join(process.cwd(), "public", "import-mirror");
 
@@ -95,6 +118,33 @@ class MemoryStore implements Store {
     next.status = "running";
     next.updated_at = now();
     return structuredClone(next);
+  }
+  async createBatch(input: {
+    source_url: string;
+    provider: Provider;
+    host_name: string | null;
+    job_ids: string[];
+  }) {
+    const batch: ImportBatch = {
+      id: randomUUID(),
+      source_url: input.source_url,
+      provider: input.provider,
+      host_name: input.host_name,
+      job_ids: input.job_ids,
+      created_at: now(),
+    };
+    mem.batches.set(batch.id, batch);
+    return structuredClone(batch);
+  }
+  async getBatch(id: string) {
+    const b = mem.batches.get(id);
+    return b ? structuredClone(b) : null;
+  }
+  async listBatches(limit = 20) {
+    return [...mem.batches.values()]
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .slice(0, limit)
+      .map((b) => structuredClone(b));
   }
   async putPhoto(jobId: string, idx: number, bytes: Buffer, contentType: string) {
     const ext = contentType.includes("png")
@@ -187,6 +237,42 @@ class SupabaseStore implements Store {
       .maybeSingle();
     if (error) throw error;
     return data ? this.rowToJob(data) : null;
+  }
+  async createBatch(input: {
+    source_url: string;
+    provider: Provider;
+    host_name: string | null;
+    job_ids: string[];
+  }) {
+    const batch: ImportBatch = {
+      id: randomUUID(),
+      source_url: input.source_url,
+      provider: input.provider,
+      host_name: input.host_name,
+      job_ids: input.job_ids,
+      created_at: now(),
+    };
+    const { error } = await this.db.from("import_batches").insert(batch);
+    if (error) throw error;
+    return batch;
+  }
+  async getBatch(id: string) {
+    const { data, error } = await this.db
+      .from("import_batches")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw error;
+    return (data as ImportBatch | null) ?? null;
+  }
+  async listBatches(limit = 20) {
+    const { data, error } = await this.db
+      .from("import_batches")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return (data ?? []) as ImportBatch[];
   }
   async putPhoto(jobId: string, idx: number, bytes: Buffer, contentType: string) {
     const ext = contentType.includes("png")
