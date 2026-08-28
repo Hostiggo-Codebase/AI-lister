@@ -25,6 +25,7 @@ function buildContent(page: ParsedPage, provider: Provider): string {
   const embedded = page.embeddedJson.length
     ? JSON.stringify(page.embeddedJson).slice(0, 60000)
     : "";
+  const { longDescription, descriptionParts, ...hintsLite } = page.hints;
   return [
     `PROVIDER: ${provider}`,
     `PAGE TITLE: ${page.title ?? ""}`,
@@ -33,9 +34,12 @@ function buildContent(page: ParsedPage, provider: Provider): string {
       description: page.meta.description,
       keywords: page.meta.keywords,
     })}`,
+    longDescription
+      ? `FULL PROPERTY DESCRIPTION (assembled from the page's own text sections — use this verbatim for "description", only cleaning boilerplate):\n${(descriptionParts.length ? descriptionParts : [longDescription]).join("\n\n---\n\n")}`
+      : "",
     `JSON-LD: ${JSON.stringify(page.jsonLd).slice(0, 20000)}`,
     `PRE-EXTRACTED HINTS (from embedded JSON — verify before trusting): ${JSON.stringify(
-      page.hints,
+      hintsLite,
     )}`,
     embedded ? `EMBEDDED STATE JSON (truncated): ${embedded}` : "",
     `CANDIDATE IMAGE URLS: ${JSON.stringify(page.imageUrls.slice(0, 80))}`,
@@ -171,10 +175,15 @@ function mockExtract(page: ParsedPage): { raw: RawExtraction; warnings: string[]
         "Imported listing",
       summary: page.openGraph.description || page.meta.description || null,
       description:
-        (ld?.description as string) ||
-        page.meta.description ||
-        page.openGraph.description ||
-        text.slice(0, 1200),
+        // longest wins: the full write-up usually only lives in embedded JSON
+        [
+          h.longDescription,
+          ld?.description as string | undefined,
+          page.meta.description,
+          page.openGraph.description,
+        ]
+          .filter((x): x is string => typeof x === "string" && x.length > 0)
+          .sort((a, b) => b.length - a.length)[0] || text.slice(0, 1200),
       property_type: /villa/i.test(text)
         ? "villa"
         : /apartment|flat/i.test(text)

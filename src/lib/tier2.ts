@@ -69,12 +69,19 @@ export async function tier2Scrape(url: string): Promise<Tier2Result> {
         await new Promise((r) => setTimeout(r, 200));
       }
       window.scrollTo(0, 0);
-      // Best-effort: open an "amenities" disclosure so its list enters the DOM.
-      const btn = [...document.querySelectorAll("button,a")].find((b) =>
-        /show all \d+ amenities|all amenities/i.test(b.textContent || ""),
-      );
-      (btn as HTMLElement | undefined)?.click();
-      await new Promise((r) => setTimeout(r, 600));
+      // Best-effort: expand disclosures so their full text enters the DOM
+      // (description "Show more", "Show all N amenities", etc.).
+      const clickable = [...document.querySelectorAll("button,a,[role=button]")];
+      for (const re of [
+        /^show more$|read more|show full description/i,
+        /show all \d+ amenities|all amenities/i,
+      ]) {
+        const btn = clickable.find((b) => re.test((b.textContent || "").trim()));
+        (btn as HTMLElement | undefined)?.click();
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      window.scrollTo(0, 0);
+      await new Promise((r) => setTimeout(r, 400));
     });
     // Wait (briefly) for a currency-prefixed price to appear anywhere on the page.
     await pw

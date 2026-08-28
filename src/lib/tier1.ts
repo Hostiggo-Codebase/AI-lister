@@ -11,6 +11,9 @@ export type PageHints = {
   lat: number | null;
   lng: number | null;
   city: string | null;
+  /** Longest plausible property description found in embedded JSON / JSON-LD. */
+  longDescription: string | null;
+  descriptionParts: string[];
 };
 
 export type ParsedPage = {
@@ -85,9 +88,12 @@ function extractHints(sources: unknown[], text: string): PageHints {
     lat: null,
     lng: null,
     city: null,
+    longDescription: null,
+    descriptionParts: [],
   };
   const amenities = new Set<string>();
   const seenPrice = new Set<string>();
+  const descParts = new Map<string, string>(); // dedupe by content
 
   const num = (v: unknown) => {
     const n = typeof v === "number" ? v : Number(String(v).replace(/[^\d.]/g, ""));
@@ -117,6 +123,25 @@ function extractHints(sources: unknown[], text: string): PageHints {
         if (n != null && n >= -180 && n <= 180) h.lng ??= n;
       } else if (/(^city$|addresslocality|cityname|localizedcity)/.test(k) && typeof value === "string") {
         if (value.length < 60) h.city ??= value;
+      } else if (
+        typeof value === "string" &&
+        value.length >= 120 &&
+        value.length <= 12000 &&
+        /(description|htmldescription|localizeddescription|summary|space|neighborhood|neighbourhood|getting_?around|access|notes|the_?space|guest_?access|other_?things|about(this)?(place|space|listing)?)/i.test(
+          k,
+        ) &&
+        // skip obvious non-prose (JSON, urls, css)
+        !/^\s*[[{]/.test(value) &&
+        !/https?:\/\/\S+\s*$/.test(value) &&
+        /[.!?]/.test(value)
+      ) {
+        const cleaned = value
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<[^>]+>/g, "")
+          .replace(/\\n/g, "\n")
+          .replace(/[ \t]+/g, " ")
+          .trim();
+        if (cleaned.length >= 120) descParts.set(cleaned.slice(0, 200), cleaned);
       } else if (
         (k === "name" || k === "title") &&
         typeof value === "string" &&
@@ -161,6 +186,47 @@ function extractHints(sources: unknown[], text: string): PageHints {
   }
 
   h.amenityNames = [...amenities].slice(0, 80);
+
+  // Assemble the description: keep the distinct parts (Airbnb splits it into
+  // "The space", "Guest access", "Other things to note", …) longest-first, then
+  // stitch the unique ones back together in a sensible order.
+  const parts = [...descParts.values()].sort((a, b) => b.length - a.length);
+  const kept: string[] = [];
+  for (const p of parts) {
+    if (kept.some((k) => k.includes(p) || p.includes(k))) continue;
+    kept.push(p);
+    if (kept.join("\n\n").length > 6000) break;
+  }
+  h.descriptionParts = kept;
+  let assembled = kept.length ? kept.join("\n\n") : null;
+
+  // The full write-up is often only in the rendered visible text (behind a
+  // "Show more" that Tier 2 expands). Slice the description region out of it:
+  // start at the first description sentence we already know, stop at the next
+  // listing section header.
+  const anchor =
+    (assembled ?? "").slice(0, 60).trim() ||
+    text.match(/[A-Z][^.!?]{40,120}[.!?]/)?.[0] ||
+    "";
+  if (anchor) {
+    const startTxt = text.indexOf(anchor.slice(0, 40));
+    if (startTxt > -1) {
+      const rest = text.slice(startTxt);
+      const stop = rest.search(
+        /(What this place offers|Where you'?ll sleep|Where you will sleep|Meet your [Hh]ost|Things to know|House rules|Safety & property|Cancellation policy|Show all \d+ reviews|·\s*\d+ reviews|\d+ reviews\b|\bRare find\b|Availability|Select check-?in|Report this listing|Show all photos|Guest favou?rite|\n(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{4}\b)/,
+      );
+      const region = (stop > 200 ? rest.slice(0, stop) : rest.slice(0, 3500))
+        .replace(/\s*\bShow more\b\s*$/i, "")
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+      if (region.length > (assembled?.length ?? 0)) assembled = region;
+    }
+  }
+
+  h.longDescription = assembled;
+  if (assembled && !h.descriptionParts.length) h.descriptionParts = [assembled];
+
   return h;
 }
 
@@ -234,7 +300,15 @@ export function parseHtml(html: string, finalUrl: string, status = 200): ParsedP
 
   const bodyText = $("body").clone();
   bodyText.find("script, style, noscript, svg").remove();
-  const textExcerpt = bodyText.text().replace(/\s+/g, " ").trim().slice(0, 16000);
+  // Keep paragraph breaks — the description slicer and the LLM both need them.
+  const rawText = bodyText
+    .text()
+    .replace(/\r/g, "")
+    .replace(/[ \t ]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const textExcerpt = rawText.slice(0, 16000);
 
   const hints = extractHints([...jsonLd, ...embeddedJson], textExcerpt);
   if (hints.lat == null && openGraph["latitude"]) hints.lat = Number(openGraph["latitude"]);
