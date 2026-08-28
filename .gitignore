@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# importer mirrored photos (local memory-store mode)
+/public/import-mirror/
+.env.local
