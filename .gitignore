@@ -43,3 +43,6 @@ next-env.d.ts
 # importer mirrored photos (local memory-store mode)
 /public/import-mirror/
 .env.local
+
+# but DO commit the service env template
+!service/.env.example

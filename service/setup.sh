@@ -25,8 +25,26 @@ if [ "${SKIP_PLAYWRIGHT:-0}" != "1" ]; then
 fi
 
 if [ ! -f .env ]; then
-  cp .env.example .env
-  echo "==> created .env from .env.example — FILL IN DATABASE_URL, SUPABASE_*, ANTHROPIC_API_KEY, then re-run."
+  if [ -f .env.example ]; then
+    cp .env.example .env
+  else
+    cat > .env <<'EOF'
+DATABASE_URL=
+DB_SCHEMA=hostiggo_testing_schema
+IMPORT_SCHEMA=hostiggo_testing_schema
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_PHOTO_BUCKET=homestay-photos
+ANTHROPIC_API_KEY=
+IMPORT_LLM_MODEL=claude-sonnet-5
+IMPORT_MAX_PHOTOS=40
+IMPORT_TIER2_ENABLED=true
+IMPORT_WORKER_CONCURRENCY=2
+API_KEY=
+LOG_LEVEL=INFO
+EOF
+  fi
+  echo "==> created service/.env — FILL IN DATABASE_URL, SUPABASE_*, ANTHROPIC_API_KEY, then re-run: bash setup.sh"
   exit 0
 fi
 
