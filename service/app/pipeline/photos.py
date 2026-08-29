@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import mimetypes
+import re
 from urllib.parse import urlparse
 
 import httpx
@@ -34,18 +35,41 @@ def _storage_ok() -> bool:
     return p.scheme in ("http", "https") and bool(p.netloc)
 
 
-def sanitize_photo_url(raw: str) -> str:
-    """Normalise a scraped/LLM photo URL into a fetchable absolute https URL."""
-    u = (raw or "").strip().strip("\"'").replace("\n", "").replace("\r", "")
-    u = u.replace("\\/", "/")
-    if u.startswith("//"):
-        u = "https:" + u
-    elif not u.startswith(("http://", "https://")):
-        u = "https://" + u.lstrip("/")
+_URL_RE = re.compile(r"https?://[^\s'\"<>\[\]\\]+", re.IGNORECASE)
+_PROTO_LESS_RE = re.compile(r"//[a-z0-9.-]+\.[a-z]{2,}/[^\s'\"<>\[\]\\]*", re.IGNORECASE)
+
+
+def sanitize_photo_url(raw: object) -> str:
+    """Pull a clean absolute https URL out of whatever the scraper/LLM produced
+    — a bare string, a {"url": ...} dict, an escaped or bracket-wrapped string."""
+    if isinstance(raw, dict):
+        raw = raw.get("url") or raw.get("src") or raw.get("baseUrl") or ""
+    if isinstance(raw, (list, tuple)) and raw:
+        raw = raw[0]
+    s = str(raw).strip().strip("[]\"' \t\n\r").replace("\\/", "/").replace("\\u002F", "/")
+    if s.startswith("data:"):
+        raise ValueError("base64 image data — skipped")
+
+    m = _URL_RE.search(s)
+    if m:
+        u = m.group(0)
+    else:
+        m = _PROTO_LESS_RE.search(s)
+        if m:
+            u = "https:" + m.group(0)
+        elif re.match(r"^[a-z0-9.-]+\.[a-z]{2,}/", s, re.IGNORECASE):
+            u = "https://" + s
+        else:
+            raise ValueError(f"no URL found in {s[:120]!r}")
+
     parsed = urlparse(u)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc or "." not in parsed.netloc:
-        raise ValueError(f"unfetchable URL: {raw!r}")
-    # force https for known CDNs that redirect anyway
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.netloc
+        or "." not in parsed.netloc
+        or any(ch in parsed.netloc for ch in " {}\"'")
+    ):
+        raise ValueError(f"invalid host {parsed.netloc!r} from {s[:120]!r}")
     if parsed.scheme == "http":
         u = "https://" + u[len("http://") :]
     return u
@@ -112,7 +136,7 @@ async def mirror_photos(import_id: int, draft: ListingDraft, logline) -> list[di
                 url = sanitize_photo_url(raw_url)
                 rec["original_url"] = url
                 host = urlparse(url).netloc
-                log.info("photo %d download: %s", idx, url)
+                log.info("photo %d: raw=%r -> clean=%r (host=%r)", idx, raw_url, url, host)
                 async with httpx.AsyncClient(
                     timeout=settings.import_fetch_timeout_s, follow_redirects=True
                 ) as c:
