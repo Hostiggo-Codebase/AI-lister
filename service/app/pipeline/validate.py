@@ -148,13 +148,18 @@ def validate_draft(raw: dict[str, Any]) -> tuple[ListingDraft, list[FieldNote]]:
         monthly_disc = _clamp(monthly_disc, 0, 100)
 
     amen_seen: set[str] = set()
+    amen_unmapped: list[str] = []
     for a in raw.get("amenities") or []:
         norm = normalize_amenity(str(a))
         if not norm:
-            add(f'amenities["{a}"]', "dropped", "no enum match")
+            s = _str(a)
+            if s and s not in amen_unmapped:
+                amen_unmapped.append(s)
             continue
         amen_seen.add(norm)
     amenities = sorted(amen_seen)
+    if amen_unmapped:
+        add("amenities", "dropped", f"{len(amen_unmapped)} not in taxonomy (kept in amenities_unmapped)")
 
     av = raw.get("availability") or {}
     hr = raw.get("house_rules") or {}
@@ -239,6 +244,7 @@ def validate_draft(raw: dict[str, Any]) -> tuple[ListingDraft, list[FieldNote]]:
             check_out_time=_str(av.get("check_out_time")),
         ),
         amenities=amenities,
+        amenities_unmapped=amen_unmapped,
         house_rules=HouseRules(
             smoking_allowed=_bool(hr.get("smoking_allowed")),
             pets_allowed=_bool(hr.get("pets_allowed")),

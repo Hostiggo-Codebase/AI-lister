@@ -119,6 +119,7 @@ class ListingDraft(BaseModel):
     pricing: Pricing = Field(default_factory=Pricing)
     availability: Availability = Field(default_factory=Availability)
     amenities: list[str] = Field(default_factory=list)
+    amenities_unmapped: list[str] = Field(default_factory=list)
     house_rules: HouseRules = Field(default_factory=HouseRules)
     safety: Safety = Field(default_factory=Safety)
     cancellation_policy: str = "unknown"
@@ -164,6 +165,8 @@ class CoverageSummary(BaseModel):
 class Coverage(BaseModel):
     rows: list[CoverageRow]
     summary: CoverageSummary
+    unresolved_required_fields: list[str] = Field(default_factory=list)
+    host_input_needed: list[str] = Field(default_factory=list)
 
 
 class Recommendation(BaseModel):

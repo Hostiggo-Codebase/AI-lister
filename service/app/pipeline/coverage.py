@@ -93,6 +93,31 @@ def compute_coverage(draft: ListingDraft, fx: FxConversion | None, consent: bool
         return sum(r.status == s for r in rows)
 
     prefilled = sum(r.status in ("auto", "partial") for r in rows)
+    # explicit field paths the host must resolve on the review screen
+    _FIELD_PATHS = {
+        "property_type": ["property_type"],
+        "stay_type": ["stay_type"],
+        "location": ["address.line", "address.postal_code"],
+        "capacity": ["capacity.max_guests", "capacity.bedroom_breakdown"],
+        "photos": ["photos"],
+        "title": ["title"],
+        "description": ["description"],
+        "booking_mode": ["booking_mode"],
+        "pricing": ["pricing.nightly_amount", "pricing.weekend_amount"],
+        "eligibility_consent": ["eligibility.host_confirmed_at"],
+    }
+    unresolved_required: list[str] = []
+    host_input_needed: list[str] = []
+    for row_ in rows:
+        paths = _FIELD_PATHS.get(row_.id, [row_.id])
+        if row_.status == "missing":
+            (unresolved_required if row_.required else host_input_needed).extend(paths)
+        elif row_.status in ("partial", "manual"):
+            host_input_needed.extend(paths)
+    # nightly price is the classic one — surface it explicitly when absent
+    if draft.pricing.nightly_amount is None and "pricing.nightly_amount" not in unresolved_required:
+        unresolved_required.append("pricing.nightly_amount")
+
     return Coverage(
         rows=rows,
         summary=CoverageSummary(
@@ -100,4 +125,6 @@ def compute_coverage(draft: ListingDraft, fx: FxConversion | None, consent: bool
             required_unresolved=sum(r.required and r.status == "missing" for r in rows),
             percent_prefilled=round(prefilled / len(rows) * 100),
         ),
+        unresolved_required_fields=sorted(set(unresolved_required)),
+        host_input_needed=sorted(set(host_input_needed)),
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import mimetypes
 
 import httpx
@@ -8,12 +9,37 @@ import httpx
 from app.config import settings
 from app.models import ListingDraft
 
+log = logging.getLogger("import.photos")
 _OK_TYPES = ("image/jpeg", "image/jpg", "image/png", "image/webp", "image/avif")
+
+_SB = settings.supabase_url.rstrip("/")
+_BUCKET = settings.supabase_photo_bucket
+_bucket_checked = False
+
+
+async def _ensure_bucket(c: httpx.AsyncClient) -> None:
+    """Create the storage bucket (public) if it doesn't exist yet."""
+    global _bucket_checked
+    if _bucket_checked:
+        return
+    _bucket_checked = True
+    hdr = {"authorization": f"Bearer {settings.supabase_service_role_key}"}
+    r = await c.get(f"{_SB}/storage/v1/bucket/{_BUCKET}", headers=hdr)
+    if r.status_code == 200:
+        return
+    r = await c.post(
+        f"{_SB}/storage/v1/bucket",
+        headers={**hdr, "content-type": "application/json"},
+        json={"id": _BUCKET, "name": _BUCKET, "public": True},
+    )
+    if r.status_code not in (200, 201, 409):
+        log.warning("could not ensure bucket %s: HTTP %s %s", _BUCKET, r.status_code, r.text[:200])
 
 
 async def _upload_supabase(key: str, data: bytes, content_type: str) -> tuple[str, str]:
-    url = f"{settings.supabase_url}/storage/v1/object/{settings.supabase_photo_bucket}/{key}"
+    url = f"{_SB}/storage/v1/object/{_BUCKET}/{key}"
     async with httpx.AsyncClient(timeout=30) as c:
+        await _ensure_bucket(c)
         r = await c.post(
             url,
             content=data,
@@ -23,11 +49,9 @@ async def _upload_supabase(key: str, data: bytes, content_type: str) -> tuple[st
                 "x-upsert": "true",
             },
         )
-        r.raise_for_status()
-    public = (
-        f"{settings.supabase_url}/storage/v1/object/public/"
-        f"{settings.supabase_photo_bucket}/{key}"
-    )
+        if r.status_code >= 400:
+            raise RuntimeError(f"storage upload HTTP {r.status_code}: {r.text[:200]}")
+    public = f"{_SB}/storage/v1/object/public/{_BUCKET}/{key}"
     return key, public
 
 

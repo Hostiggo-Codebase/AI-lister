@@ -23,7 +23,13 @@ Prefer the FULL PROPERTY DESCRIPTION block verbatim.
 - "photos" = direct image URLs from og:image, gallery <img>, JSON-LD image arrays, or the \
 EMBEDDED STATE JSON. Exclude icons, avatars, map tiles, "platform-assets".
 - Prices: nightly rate + ISO-4217 currency (INR for ₹/Rs). The nightly rate is the smallest \
-per-night figure, not a multi-night total or a fee-inclusive number.
+per-night figure, not a multi-night total or a fee-inclusive number. If PRE-EXTRACTED HINTS has \
+price_candidates, the smallest sane one is almost certainly the nightly rate — use it unless the \
+page text clearly contradicts it. Only leave nightly_amount null if there is genuinely no price \
+anywhere in the content.
+- "safety": fill the smoke_alarm / carbon_monoxide_alarm / fire_extinguisher / first_aid_kit \
+booleans from the page's safety section (true only if explicitly present; leave null if unstated). \
+These are separate from the "amenities" list.
 - Mine the EMBEDDED STATE JSON for price, capacity, bedrooms, beds, bathrooms, coordinates, city, \
 amenities, cancellation policy and check-in/out when the visible text lacks them.
 - Return via the "emit_listing_draft" tool."""
