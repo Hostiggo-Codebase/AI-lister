@@ -109,20 +109,31 @@ def compute_coverage(draft: ListingDraft, fx: FxConversion | None, consent: bool
     unresolved_required: list[str] = []
     host_input_needed: list[str] = []
     for row_ in rows:
-        paths = _FIELD_PATHS.get(row_.id, [row_.id])
-        if row_.status == "missing":
-            (unresolved_required if row_.required else host_input_needed).extend(paths)
-        elif row_.status in ("partial", "manual"):
+        paths = list(_FIELD_PATHS.get(row_.id, [row_.id]))
+        # a required field is "resolved" only if it imported (auto / partial);
+        # 'manual' and 'missing' on a required field both block publishing.
+        if row_.required and row_.status in ("missing", "manual"):
+            unresolved_required.extend(paths)
+        if row_.status in ("partial", "manual") or (row_.status == "missing" and not row_.required):
             host_input_needed.extend(paths)
-    # nightly price is the classic one — surface it explicitly when absent
-    if draft.pricing.nightly_amount is None and "pricing.nightly_amount" not in unresolved_required:
+
+    # don't ask the host to re-enter a value that already imported cleanly
+    if draft.pricing.nightly_amount is not None:
+        host_input_needed = [p for p in host_input_needed if p != "pricing.nightly_amount"]
+        unresolved_required = [p for p in unresolved_required if p != "pricing.nightly_amount"]
+    elif "pricing.nightly_amount" not in unresolved_required:
         unresolved_required.append("pricing.nightly_amount")
 
     return Coverage(
         rows=rows,
         summary=CoverageSummary(
             auto=c("auto"), partial=c("partial"), manual=c("manual"), missing=c("missing"),
-            required_unresolved=sum(r.required and r.status == "missing" for r in rows),
+            # required rows still needing the host: 'missing' OR 'manual' (e.g. consent)
+            required_unresolved=sum(
+                r.required and r.status in ("missing", "manual") for r in rows
+            ),
+            # (auto + partial) / 15 — partial counts as pre-filled because the value
+            # is imported and only needs host review, not entry.
             percent_prefilled=round(prefilled / len(rows) * 100),
         ),
         unresolved_required_fields=sorted(set(unresolved_required)),

@@ -61,7 +61,12 @@ def build_recommendations(draft: ListingDraft) -> list[Recommendation]:
     if missing_hv:
         r("amen_high_value", "medium", "amenities", "High-value amenities not set",
           f"Guests filter hard on: {', '.join(missing_hv)}. Confirm whether the property has these.")
-    if not any(a in have for a in ("smoke_alarm", "fire_extinguisher", "first_aid_kit")):
+    sfy = draft.safety
+    has_safety = any((
+        sfy.smoke_alarm, sfy.carbon_monoxide_alarm, sfy.fire_extinguisher, sfy.first_aid_kit,
+    )) or any(a in have for a in ("smoke_alarm", "carbon_monoxide_alarm", "fire_extinguisher",
+                                  "first_aid_kit"))
+    if not has_safety:
         r("amen_safety", "medium", "safety", "No safety equipment listed",
           "Add smoke alarm / fire extinguisher / first-aid kit.")
 

@@ -124,6 +124,13 @@ async def commit_import(import_id: int, body: CommitImport):
     if row.get("listing_id"):
         return {"listing_id": row["listing_id"], "already_committed": True}
 
+    # Group 15: the host must explicitly consent at publish — never imported.
+    if not body.confirm:
+        raise HTTPException(
+            422,
+            {"error": "host consent required", "issues": ["eligibility.host_confirmed_at"]},
+        )
+
     if body.draft is not None:
         draft, _ = validate_draft(body.draft.model_dump())
     elif row.get("normalized_payload"):
@@ -135,7 +142,15 @@ async def commit_import(import_id: int, body: CommitImport):
     if issues:
         raise HTTPException(422, {"error": "draft incomplete", "issues": issues})
 
-    await jobs.update_import(import_id, normalized_payload=draft.model_dump())
+    from datetime import UTC, datetime
+
+    row["host_confirmed_ownership"] = True
+    row["host_confirmed_at"] = datetime.now(UTC).isoformat()
+    await jobs.update_import(
+        import_id,
+        normalized_payload=draft.model_dump(),
+        host_confirmed_ownership=True,
+    )
     return await publish_draft(row, draft)
 
 
