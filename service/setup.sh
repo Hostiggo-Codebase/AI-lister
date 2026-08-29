@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# One-shot setup: venv + deps + (optional) Chromium + DB migrations.
+# Run from the service/ directory:  bash setup.sh
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+echo "==> Python venv"
+python3 -m venv .venv
+# shellcheck disable=SC1091
+source .venv/bin/activate
+pip install --upgrade pip >/dev/null
+
+echo "==> dependencies"
+pip install \
+  fastapi "uvicorn[standard]" pydantic pydantic-settings httpx selectolax \
+  asyncpg anthropic tenacity python-dateutil \
+  pytest pytest-asyncio ruff
+
+if [ "${SKIP_PLAYWRIGHT:-0}" != "1" ]; then
+  echo "==> Playwright Chromium (Tier 2). Set SKIP_PLAYWRIGHT=1 to skip."
+  pip install playwright
+  python -m playwright install --with-deps chromium || \
+    echo "   (chromium install failed — Tier 2 will degrade to Tier 1; not fatal)"
+fi
+
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "==> created .env from .env.example — FILL IN DATABASE_URL, SUPABASE_*, ANTHROPIC_API_KEY, then re-run."
+  exit 0
+fi
+
+# shellcheck disable=SC1091
+set -a; source .env; set +a
+
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "==> DATABASE_URL is empty in .env — fill it in, then run:  bash migrate.sh"
+  exit 0
+fi
+
+echo "==> applying SQL migrations"
+bash migrate.sh
+
+echo
+echo "Done. Start the service with:"
+echo "  source .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
