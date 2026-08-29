@@ -1,6 +1,9 @@
 -- Hostiggo OTA Listing Import — new tables & columns
 -- Target schema: hostiggo_testing_schema  (change the SET below if different)
 
+-- If your existing listing tables live in a different schema, change both
+-- occurrences below AND set DB_SCHEMA / IMPORT_SCHEMA in service/.env to match.
+create schema if not exists hostiggo_testing_schema;
 set search_path to hostiggo_testing_schema, public;
 
 create extension if not exists "pgcrypto";
@@ -110,27 +113,6 @@ drop trigger if exists trg_listing_ical_feeds_updated on listing_ical_feeds;
 create trigger trg_listing_ical_feeds_updated before update on listing_ical_feeds
   for each row execute function set_updated_at();
 
--- --------------------------------------------------------------------------- --
--- provenance columns on the existing tables
--- (names must match app/schema_map.py)
--- --------------------------------------------------------------------------- --
-alter table listings
-  add column if not exists source                   text not null default 'native',
-  add column if not exists import_id                bigint references listing_imports (import_id)
-                                                      on delete set null,
-  add column if not exists external_url             text,
-  add column if not exists external_listing_id      text,
-  add column if not exists import_confirmed_by_host boolean not null default false,
-  add column if not exists min_nights               int,
-  add column if not exists max_nights               int,
-  add column if not exists cancellation_policy      text;
-
-alter table listing_media
-  add column if not exists source     text not null default 'upload',
-  add column if not exists source_url text,
-  add column if not exists import_id  bigint references listing_imports (import_id)
-                                        on delete set null;
-
-alter table listing_imports
-  add constraint listing_imports_listing_fk
-  foreign key (listing_id) references listings (id) on delete set null not valid;
+-- NOTE: the provenance columns on the EXISTING tables (listings, listing_media)
+-- and the FK from listing_imports -> listings live in 004_provenance.sql, so a
+-- name mismatch there can't roll back the new tables above.
