@@ -41,14 +41,20 @@ def _record(row: dict) -> dict:
 # single import
 # --------------------------------------------------------------------------- #
 @router.post("/imports", status_code=201, dependencies=[Guard])
-async def create_import(body: CreateImport):
+async def create_import(body: CreateImport, force: bool = Query(False)):
     if not body.host_confirmed_ownership:
         raise HTTPException(400, "host_confirmed_ownership is required")
     try:
         url, provider, ext = validate_import_url(body.url)
     except UrlError as e:
         raise HTTPException(400, str(e)) from e
-    row = await jobs.create_import({
+
+    if force and ext:
+        prior = await jobs.get_import_by_external(provider, ext)
+        if prior and not prior.get("listing_id"):
+            await jobs.delete_import(prior["import_id"])
+
+    payload = {
         "host_uuid": body.host_uuid,
         "source": "airbnb_import" if provider == "airbnb" else f"{provider}_import",
         "source_url": url,
@@ -62,7 +68,12 @@ async def create_import(body: CreateImport):
             "skip_photo_mirror": body.skip_photo_mirror,
         },
         "logs": [],
-    })
+    }
+    try:
+        row = await jobs.create_import(payload)
+    except jobs.DuplicateImport as dup:
+        # Already imported — hand back the existing record instead of erroring.
+        return {"import": _record(dup.existing), "duplicate": True}
     return {"import": _record(row)}
 
 

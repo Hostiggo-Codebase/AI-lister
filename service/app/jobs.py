@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import asyncpg
+
 from app.config import settings
-from app.db import dict_row, fetch, fetchrow, pool
+from app.db import dict_row, execute, fetch, fetchrow, pool
 
 IS = settings.import_schema
 IMP = f'"{IS}"."listing_imports"'
@@ -25,13 +27,38 @@ def _encode(patch: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-async def create_import(data: dict[str, Any]) -> dict:
-    data = _encode(data)
-    cols = ", ".join(f'"{k}"' for k in data)
-    ph = ", ".join(f"${i + 1}" for i in range(len(data)))
-    row = await fetchrow(
-        f"insert into {IMP} ({cols}) values ({ph}) returning *", *data.values()
+class DuplicateImport(Exception):
+    def __init__(self, existing: dict):
+        self.existing = existing
+        super().__init__("this listing was already imported")
+
+
+async def get_import_by_external(provider: str, ext: str) -> dict | None:
+    return dict_row(
+        await fetchrow(
+            f"select * from {IMP} where provider = $1 and external_listing_id = $2 "
+            "and status <> 'failed' order by import_id desc limit 1",
+            provider,
+            ext,
+        )
     )
+
+
+async def create_import(data: dict[str, Any]) -> dict:
+    enc = _encode(data)
+    cols = ", ".join(f'"{k}"' for k in enc)
+    ph = ", ".join(f"${i + 1}" for i in range(len(enc)))
+    try:
+        row = await fetchrow(
+            f"insert into {IMP} ({cols}) values ({ph}) returning *", *enc.values()
+        )
+    except asyncpg.UniqueViolationError as e:
+        ext = data.get("external_listing_id")
+        if ext:
+            existing = await get_import_by_external(data["provider"], ext)
+            if existing:
+                raise DuplicateImport(existing) from e
+        raise
     return dict_row(row)
 
 
@@ -80,6 +107,10 @@ async def claim_next_pending() -> dict | None:
         d = dict(row)
         d["status"] = "fetching"
         return d
+
+
+async def delete_import(import_id: int) -> None:
+    await execute(f"delete from {IMP} where import_id = $1", import_id)
 
 
 async def reset_import(import_id: int) -> dict:
