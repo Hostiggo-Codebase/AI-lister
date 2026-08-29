@@ -1,10 +1,31 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        env_ignore_empty=True,
+    )
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _strip_and_drop_inline_comments(cls, v):
+        """Tolerate `.env` values with trailing whitespace / inline `# comments`."""
+        if isinstance(v, str):
+            v = v.strip()
+            # a value that is only an inline comment == not set
+            if v.startswith("#"):
+                return ""
+            # strip ` # comment` when preceded by whitespace (matches dotenv)
+            for i in range(1, len(v)):
+                if v[i] == "#" and v[i - 1] in " \t":
+                    return v[:i].strip()
+        return v
 
     # database
     database_url: str = ""
