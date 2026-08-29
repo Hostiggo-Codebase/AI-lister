@@ -25,8 +25,16 @@ async def connect() -> None:
     global _pool
     if _pool or not settings.has_db:
         return
+    # Supabase's transaction pooler (port 6543) runs pgbouncer in transaction
+    # mode, which doesn't support prepared statements — disable asyncpg's
+    # statement cache so it works on both the pooler and a direct connection.
     _pool = await asyncpg.create_pool(
-        settings.database_url, min_size=1, max_size=10, init=_init, command_timeout=60
+        settings.database_url,
+        min_size=1,
+        max_size=10,
+        init=_init,
+        command_timeout=60,
+        statement_cache_size=0,
     )
 
 
