@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import asyncpg
@@ -14,6 +13,8 @@ IS = settings.import_schema
 IMP = f'"{IS}"."listing_imports"'
 BATCH = f'"{IS}"."import_batches"'
 
+# jsonb columns are encoded once by the asyncpg codec in app.db — pass raw
+# Python objects straight through, never pre-serialise them here.
 _JSON_FIELDS = {
     "raw_payload", "normalized_payload", "field_coverage", "recommendations",
     "fx", "ical", "source_photo_urls", "mirrored_photos", "logs",
@@ -21,10 +22,7 @@ _JSON_FIELDS = {
 
 
 def _encode(patch: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
-    for k, v in patch.items():
-        out[k] = json.dumps(v) if k in _JSON_FIELDS and v is not None else v
-    return out
+    return dict(patch)
 
 
 class DuplicateImport(Exception):
