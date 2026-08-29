@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 
@@ -71,7 +72,9 @@ async def run_pipeline(record: dict) -> dict:
         # ---- LLM extract -----------------------------------------
         logline("llm_extract", "info", "→ llm_extract")
         await checkpoint(Stage.llm_extract, tier_used=tier_used)
-        extraction = await extract_listing(page, provider, opts.get("llm_model"))
+        extraction = await asyncio.wait_for(
+            extract_listing(page, provider, opts.get("llm_model")), timeout=180
+        )
         for w in extraction.warnings:
             logline("llm_extract", "warn", w)
         logline("llm_extract", "info", f"engine={extraction.engine} model={extraction.model}")
@@ -133,8 +136,16 @@ async def run_pipeline(record: dict) -> dict:
             import_id, status=JobStatus.needs_review.value, stage=Stage.done.value, logs=logs
         )
     except Exception as e:
+        detail = f"{type(e).__name__}: {e}"
         log.exception("pipeline failed for import %s", import_id)
-        logline(record.get("stage") or "pipeline", "error", str(e))
-        return await jobs.update_import(
-            import_id, status=JobStatus.failed.value, error_message=str(e), logs=logs
-        )
+        logline(record.get("stage") or "pipeline", "error", detail)
+        # bulletproof: try the full update, then a minimal one, then give up loudly
+        for patch in (
+            {"status": JobStatus.failed.value, "error_message": detail, "logs": logs},
+            {"status": JobStatus.failed.value, "error_message": detail[:2000]},
+        ):
+            try:
+                return await jobs.update_import(import_id, **patch)
+            except Exception:
+                log.exception("could not persist failure for import %s", import_id)
+        return record

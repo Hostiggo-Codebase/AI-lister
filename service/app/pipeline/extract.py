@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -8,6 +9,8 @@ from typing import Any
 from app.config import settings
 from app.models import LLM_TOOL_SCHEMA, Provider
 from app.pipeline.tier1 import ParsedPage
+
+log = logging.getLogger("import.extract")
 
 SYSTEM = """You extract a structured homestay/vacation-rental listing from the raw content of an \
 online travel agency (OTA) page.
@@ -34,9 +37,34 @@ class ExtractionResult:
     warnings: list[str] = field(default_factory=list)
 
 
+def _relevant_embedded(page: ParsedPage) -> str:
+    """Only the slice of embedded JSON near listing-ish keys — keeps the prompt
+    small and focused instead of dumping Airbnb's whole 500KB deferred state."""
+    if not page.embedded_json:
+        return ""
+    blob = json.dumps(page.embedded_json)
+    if len(blob) <= 45000:
+        return blob
+    keys = ("description", "price", "amenit", "bedroom", "bathroom", "personCapacity",
+            "latitude", "longitude", "localizedCity", "checkIn", "checkOut", "cancel",
+            "rating", "review", "superhost", "hostName")
+    lo = len(blob)
+    hi = 0
+    low = blob.lower()
+    for k in keys:
+        i = low.find(k.lower())
+        if i != -1:
+            lo = min(lo, i)
+            hi = max(hi, i + len(k))
+    if hi <= lo:
+        return blob[:45000]
+    start = max(0, lo - 4000)
+    return blob[start : min(len(blob), hi + 20000)][:60000]
+
+
 def _build_content(page: ParsedPage, provider: Provider) -> str:
     h = page.hints
-    embedded = json.dumps(page.embedded_json)[:60000] if page.embedded_json else ""
+    embedded = _relevant_embedded(page)
     hints_lite = {
         "price_candidates": h.price_candidates,
         "person_capacity": h.person_capacity,
@@ -79,25 +107,38 @@ async def extract_listing(
 
     from anthropic import AsyncAnthropic
 
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    msg = await client.messages.create(
-        model=model,
-        max_tokens=8192,
-        system=SYSTEM,
-        tools=[
-            {
-                "name": "emit_listing_draft",
-                "description": "Return the extracted listing draft.",
-                "input_schema": LLM_TOOL_SCHEMA,
-            }
-        ],
-        tool_choice={"type": "tool", "name": "emit_listing_draft"},
-        messages=[{"role": "user", "content": _build_content(page, provider)}],
-    )
-    tool_use = next((b for b in msg.content if b.type == "tool_use"), None)
-    if tool_use is None:
-        raise RuntimeError("LLM returned no tool_use block")
-    return ExtractionResult("anthropic", model, dict(tool_use.input), [])
+    content = _build_content(page, provider)
+    log.info("llm input: %d chars (~%d tokens)", len(content), len(content) // 4)
+
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=120.0, max_retries=2)
+    try:
+        msg = await client.messages.create(
+            model=model,
+            max_tokens=8192,
+            system=SYSTEM,
+            tools=[
+                {
+                    "name": "emit_listing_draft",
+                    "description": "Return the extracted listing draft.",
+                    "input_schema": LLM_TOOL_SCHEMA,
+                }
+            ],
+            tool_choice={"type": "tool", "name": "emit_listing_draft"},
+            messages=[{"role": "user", "content": content}],
+        )
+        tool_use = next((b for b in msg.content if b.type == "tool_use"), None)
+        if tool_use is None:
+            raise RuntimeError("LLM returned no tool_use block")
+        return ExtractionResult("anthropic", model, dict(tool_use.input), [])
+    except Exception as e:  # noqa: BLE001 — never let a bad LLM call strand the import
+        log.warning("LLM extraction failed (%s: %s) — falling back to heuristic", type(e).__name__, e)
+        raw, warnings = _heuristic(page)
+        return ExtractionResult(
+            "heuristic-fallback",
+            "heuristic-mock",
+            raw,
+            [f"LLM call failed ({type(e).__name__}: {e}); used heuristic extractor", *warnings],
+        )
 
 
 # --------------------------------------------------------------------------- #
