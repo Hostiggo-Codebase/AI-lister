@@ -92,7 +92,8 @@ def compute_coverage(draft: ListingDraft, fx: FxConversion | None, consent: bool
     def c(s):
         return sum(r.status == s for r in rows)
 
-    prefilled = sum(r.status in ("auto", "partial") for r in rows)
+    # progress metric over the 15 groups: auto = 1.0, partial = 0.5, else 0
+    prefilled = c("auto") + c("partial") * 0.5
     # explicit field paths the host must resolve on the review screen
     _FIELD_PATHS = {
         "property_type": ["property_type"],
@@ -132,9 +133,8 @@ def compute_coverage(draft: ListingDraft, fx: FxConversion | None, consent: bool
             required_unresolved=sum(
                 r.required and r.status in ("missing", "manual") for r in rows
             ),
-            # (auto + partial) / 15 — partial counts as pre-filled because the value
-            # is imported and only needs host review, not entry.
-            percent_prefilled=round(prefilled / len(rows) * 100),
+            # (auto*1 + partial*0.5) / 15 — reflects effort saved, not fields touched.
+            percent_prefilled=int(prefilled / len(rows) * 100),
         ),
         unresolved_required_fields=sorted(set(unresolved_required)),
         host_input_needed=sorted(set(host_input_needed)),
