@@ -9,6 +9,9 @@ in the response's `skipped[]` rather than raising.
 from __future__ import annotations
 
 import logging
+import re
+from datetime import time as dtime
+from decimal import Decimal, InvalidOperation
 
 from app import schema_map as sm
 from app.config import settings
@@ -44,11 +47,11 @@ _AMENITY_NAME = {
 
 
 def _to_time(v):
-    """Parse a loose check-in/out string like '2:00 PM' or '14:00' to HH:MM:SS."""
-    if not v:
+    """Parse a loose check-in/out string like '2:00 PM' or '14:00' -> datetime.time."""
+    if v is None or v == "":
         return None
-    import re
-
+    if isinstance(v, dtime):
+        return v
     m = re.search(r"(\d{1,2})[:.]?(\d{2})?\s*([ap]\.?m\.?)?", str(v), re.IGNORECASE)
     if not m:
         return None
@@ -59,14 +62,23 @@ def _to_time(v):
         hh += 12
     if ap == "am" and hh == 12:
         hh = 0
-    hh = min(hh, 23)
-    return f"{hh:02d}:{mm:02d}:00"
+    return dtime(hour=min(hh, 23), minute=min(mm, 59))
 
 
 def _int(v):
     try:
         return round(float(v)) if v is not None else None
     except (TypeError, ValueError):
+        return None
+
+
+def _dec(v):
+    """asyncpg needs Decimal (not float) for `numeric` columns."""
+    if v is None or v == "":
+        return None
+    try:
+        return Decimal(str(v))
+    except (InvalidOperation, ValueError):
         return None
 
 
@@ -151,14 +163,14 @@ async def publish_draft(record: dict, draft: ListingDraft) -> dict:
             "address_line2": None,
             "landmark": draft.address.landmark,
             "pincode": _int(draft.address.postal_code),
-            "latitude": draft.location.lat,
-            "longitude": draft.location.lng,
+            "latitude": _dec(draft.location.lat),
+            "longitude": _dec(draft.location.lng),
             "num_guests": _int(draft.capacity.max_guests),
             "num_bedrooms": _int(draft.capacity.bedrooms),
             "num_beds": _int(draft.capacity.beds),
             "num_bathrooms": _int(draft.capacity.bathrooms),
-            "price_weekday": draft.pricing.nightly_amount,
-            "price_weekend": draft.pricing.weekend_amount,
+            "price_weekday": _dec(draft.pricing.nightly_amount),
+            "price_weekend": _dec(draft.pricing.weekend_amount),
             "currency": draft.pricing.currency or "INR",
             "booking_mode": draft.booking_mode,
             "check_in_time": _to_time(draft.availability.check_in_time),
@@ -234,7 +246,7 @@ async def publish_draft(record: dict, draft: ListingDraft) -> dict:
                 continue
             await _insert(conn, sm.TBL_DISCOUNTS, sm.DISCOUNT_COLS, {
                 "listing_id": listing_id, "discount_type": dtype,
-                "percent": pct, "enabled": True,
+                "percent": _dec(pct), "enabled": True,
             })
 
         # house rules (quiet_hours is a boolean here)
