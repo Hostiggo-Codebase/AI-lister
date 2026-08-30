@@ -283,15 +283,15 @@ def validate_draft(raw: dict[str, Any]) -> tuple[ListingDraft, list[FieldNote]]:
 
 
 def committable_issues(draft: ListingDraft) -> list[str]:
+    """Hard gates for creating the draft listing. Pricing, exact address, weekend
+    rate, add-ons and consent are all completed by the host on the review screen
+    (they surface in field_coverage.unresolved_required_fields), so they do NOT
+    block the import -> draft step."""
     errs = []
     if not draft.title or draft.title == "Untitled listing":
         errs.append("title required")
     if not draft.description:
         errs.append("description required")
-    if draft.pricing.nightly_amount is None:
-        errs.append("nightly price required")
     if not draft.address.city:
         errs.append("city required")
-    if len(draft.photos) < 3:
-        errs.append("at least 3 photos required")
     return errs
