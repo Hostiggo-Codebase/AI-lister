@@ -82,8 +82,12 @@ def test_validate_and_coverage():
     assert cov.summary.percent_prefilled > 50
     ids = {r.id: r.status for r in cov.rows}
     assert ids["title"] == "auto"
-    assert ids["location"] in ("partial", "missing")
+    assert ids["location"] in ("auto", "partial")  # city+country -> auto
     assert ids["addons"] == "manual"
+    # street address is hidden by the OTA -> always host-supplied; consent too
+    assert "address.line" in cov.unresolved_required_fields
+    assert "eligibility.host_confirmed_at" in cov.unresolved_required_fields
+    assert cov.summary.required_unresolved >= 1
 
     recs = build_recommendations(draft)
     assert all(r.severity in ("high", "medium", "low") for r in recs)

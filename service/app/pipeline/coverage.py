@@ -32,15 +32,19 @@ def compute_coverage(draft: ListingDraft, fx: FxConversion | None, consent: bool
         draft.property_type, "Mapped onto the 19 Hostiggo types — confirm the closest match.")
     row("stay_type", "Stay type", True, "auto" if draft.stay_type else "missing",
         draft.stay_type, "Maps 1:1 from the source room type.")
-    row("location", "Location", True, "partial" if draft.address.city else "missing",
+    # city/state/country import automatically -> AUTO; street & pincode are hidden
+    # by the OTA and always pushed to unresolved_required_fields.
+    row("location", "Location", True,
+        "auto" if (draft.address.city and draft.address.country) else
+        ("partial" if draft.address.city else "missing"),
         _join(draft.address.line, draft.address.city, draft.address.state,
               draft.address.postal_code)
         or (f"~{draft.location.lat}, {draft.location.lng}" if draft.location.lat is not None else ""),
-        "OTAs hide the exact street address & pincode until booking — host confirms the precise "
-        "address and map pin.")
+        "City/state/country imported; exact street address & pincode are hidden by the OTA — "
+        "host confirms those and the map pin.")
     cap_totals = sum(x is not None for x in (cap.max_guests, cap.bedrooms, cap.beds, cap.bathrooms))
     row("capacity", "Capacity", True,
-        "missing" if cap.max_guests is None else ("auto" if cap_totals >= 3 else "partial"),
+        "missing" if cap.max_guests is None else ("auto" if cap_totals >= 2 else "partial"),
         _join(f"{cap.max_guests} guests" if cap.max_guests else None,
               f"{cap.bedrooms} BR" if cap.bedrooms is not None else None,
               f"{cap.beds} beds" if cap.beds is not None else None,
@@ -107,7 +111,14 @@ def compute_coverage(draft: ListingDraft, fx: FxConversion | None, consent: bool
         "pricing": ["pricing.nightly_amount", "pricing.weekend_amount"],
         "eligibility_consent": ["eligibility.host_confirmed_at"],
     }
-    unresolved_required: list[str] = []
+    # always host-supplied regardless of the row's overall status
+    _ALWAYS_UNRESOLVED = ["eligibility.host_confirmed_at"]
+    if not draft.address.line:
+        _ALWAYS_UNRESOLVED.append("address.line")
+    if not draft.address.postal_code:
+        _ALWAYS_UNRESOLVED.append("address.postal_code")
+
+    unresolved_required: list[str] = list(_ALWAYS_UNRESOLVED)
     host_input_needed: list[str] = []
     for row_ in rows:
         paths = list(_FIELD_PATHS.get(row_.id, [row_.id]))
@@ -117,6 +128,7 @@ def compute_coverage(draft: ListingDraft, fx: FxConversion | None, consent: bool
             unresolved_required.extend(paths)
         if row_.status in ("partial", "manual") or (row_.status == "missing" and not row_.required):
             host_input_needed.extend(paths)
+    host_input_needed.append("pricing.weekend_amount")
 
     # don't ask the host to re-enter a value that already imported cleanly
     if draft.pricing.nightly_amount is not None:
