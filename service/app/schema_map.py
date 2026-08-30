@@ -1,23 +1,16 @@
 """
 Single source of truth for the EXISTING Hostiggo listing schema
-(`hostiggo_testing_schema`).
+(`hostiggo_testing_schema`). Reconciled 2026-08-30 against the live DB.
 
-The "Import from an Airbnb link" brainstorm describes these tables in prose but
-not as DDL, so the exact column names below are best-effort. Reconcile them with
-your real schema HERE and nowhere else — `publish.py` builds every INSERT from
-this map, and a column set to ``None`` is simply skipped (and noted on the
-import record) rather than crashing the publish.
-
-New tables the import feature owns (`listing_imports`, `external_taxonomy_map`,
-`listing_ical_feeds`) are defined in ``sql/001_import_tables.sql`` and are NOT
-part of this reconciliation.
+`publish.py` builds every INSERT from this map. A column mapped to ``None`` is
+skipped (and reported on the import's `skipped` list) rather than crashing.
 """
 
 from __future__ import annotations
 
 from app.config import settings
 
-S = settings.db_schema  # existing listing schema
+S = settings.db_schema
 
 
 def t(name: str) -> str:
@@ -34,65 +27,58 @@ TBL_AMENITIES = "listing_amenities"
 TBL_DISCOUNTS = "listing_discounts"
 TBL_HOUSE_RULES = "listing_house_rules"
 TBL_SAFETY = "listing_safety"
-TBL_ADDONS = "listing_addons"  # MANUAL — never written by the importer
 TBL_PROPERTY_TYPES = "property_types"
 TBL_STAY_TYPES = "stay_types"
 TBL_AMENITY_CATALOG = "amenities"
 
-
 # --------------------------------------------------------------------------- #
-# listings — logical field -> real column (None = not stored / unknown -> skip)
+# listings — logical field -> real column
 # --------------------------------------------------------------------------- #
+LISTINGS_PK = "listing_id"
 LISTINGS_COLS: dict[str, str | None] = {
-    "id": "id",
+    "id": "listing_id",
     "host_uuid": "host_uuid",
     "title": "title",
     "description": "description",
     "property_type_id": "property_type_id",
     "stay_type_id": "stay_type_id",
-    "address_line": "address_line",
+    "address_line1": "address_line1",
+    "address_line2": "address_line2",
     "landmark": "landmark",
-    "city": "city",
-    "state": "state",
-    "country": "country",
-    "pincode": "pincode",
+    "pincode": "pincode",  # integer
     "latitude": "latitude",
     "longitude": "longitude",
-    "max_guests": "max_guests",
-    "bedrooms": "bedrooms",
-    "beds": "beds",
-    "bathrooms": "bathrooms",
-    "base_price": "base_price",  # weekday nightly, INR
-    "weekend_price": "weekend_price",
+    "num_guests": "num_guests",
+    "num_bedrooms": "num_bedrooms",
+    "num_beds": "num_beds",
+    "num_bathrooms": "num_bathrooms",  # integer
+    "price_weekday": "price_weekday",
+    "price_weekend": "price_weekend",
     "currency": "currency",
-    "min_price": "min_price",
-    "booking_mode": "booking_mode",  # 'instant' | 'request'
+    "booking_mode": "booking_mode",
     "check_in_time": "check_in_time",
     "check_out_time": "check_out_time",
-    "status": "status",  # 'draft' | 'published'
-    # provenance columns added by sql/001_import_tables.sql
-    "source": "source",  # 'native' | 'airbnb_import'
+    "cancellation_policy": "cancellation_policy",
+    "ical_link": "icalLink",
+    "is_active": "is_active",
+    # provenance columns added by sql/004_provenance.sql
+    "source": "source",
     "import_id": "import_id",
     "external_url": "external_url",
     "external_listing_id": "external_listing_id",
     "import_confirmed_by_host": "import_confirmed_by_host",
-    # phase-2 columns from the brainstorm
     "min_nights": "min_nights",
     "max_nights": "max_nights",
-    "cancellation_policy": "cancellation_policy",
-    "created_at": "created_at",
-    "updated_at": "updated_at",
 }
 
 MEDIA_COLS: dict[str, str | None] = {
     "id": "id",
     "listing_id": "listing_id",
-    "url": "url",  # public URL of the re-hosted photo
-    "storage_path": "storage_path",
+    "media_url": "media_url",
+    "media_type": "media_type",  # 'image'
     "is_cover": "is_cover",
-    "sort_order": "sort_order",
-    "caption": "caption",
-    "source": "source",  # 'upload' | 'airbnb_import'
+    # provenance columns added by sql/004
+    "source": "source",
     "source_url": "source_url",
     "import_id": "import_id",
 }
@@ -100,13 +86,14 @@ MEDIA_COLS: dict[str, str | None] = {
 BEDROOM_COLS: dict[str, str | None] = {
     "id": "id",
     "listing_id": "listing_id",
-    "bedroom_number": "bedroom_number",
+    "bedroom_index": "bedroom_index",
     "beds": "beds",
-    "bed_type": "bed_type",
+    "bathrooms": "bathrooms",
+    "max_guests": "max_guests",
 }
 
 LISTING_AMENITY_COLS: dict[str, str | None] = {
-    "id": "id",
+    "id": None,  # composite (listing_id, amenity_id) — no surrogate key
     "listing_id": "listing_id",
     "amenity_id": "amenity_id",
 }
@@ -114,9 +101,10 @@ LISTING_AMENITY_COLS: dict[str, str | None] = {
 DISCOUNT_COLS: dict[str, str | None] = {
     "id": "id",
     "listing_id": "listing_id",
-    "new_listing_pct": "new_listing_pct",
-    "weekly_pct": "weekly_pct",
-    "monthly_pct": "monthly_pct",
+    "discount_type": "discount_type",  # 'weekly' | 'monthly' | 'new_listing'
+    "percent": "percent",
+    "enabled": "enabled",
+    "min_stay_nights": "min_stay_nights",
 }
 
 HOUSE_RULE_COLS: dict[str, str | None] = {
@@ -127,33 +115,30 @@ HOUSE_RULE_COLS: dict[str, str | None] = {
     "smoking_allowed": "smoking_allowed",
     "pets_allowed": "pets_allowed",
     "parties_allowed": "parties_allowed",
-    "quiet_hours": "quiet_hours",
-    "additional_rules": "additional_rules",
+    "quiet_hours": "quiet_hours",  # BOOLEAN in this schema
 }
 
 SAFETY_COLS: dict[str, str | None] = {
-    "id": "id",
+    "id": None,
     "listing_id": "listing_id",
     "security_camera": "security_camera",
     "noise_monitoring": "noise_monitoring",
-    "weapons_on_property": "weapons_on_property",
+    "weapons": "weapons",
     "smoke_alarm": "smoke_alarm",
-    "carbon_monoxide_alarm": "carbon_monoxide_alarm",
-    "first_aid_kit": "first_aid_kit",
-    "fire_extinguisher": "fire_extinguisher",
 }
 
-# catalog lookups: which column holds the human label to fuzzy-match against
-PROPERTY_TYPE_ID = "type_id"
+# catalog lookups
+PROPERTY_TYPE_ID = "id"          # FK target = property_types.id
+PROPERTY_TYPE_SLUG = "type_id"   # text slug column, e.g. 'house', 'guest-house'
 PROPERTY_TYPE_LABEL = "name"
-STAY_TYPE_ID = "type_id"
-STAY_TYPE_LABEL = "name"
+STAY_TYPE_ID = "id"
+STAY_TYPE_SLUG = "type_id"       # 'entire' | 'private' | 'shared'
+STAY_TYPE_LABEL = "title"
 AMENITY_ID = "amenity_id"
 AMENITY_LABEL = "name"
 
 
 def cols(mapping: dict[str, str | None], data: dict) -> tuple[list[str], list]:
-    """Filter *data* to the columns that actually exist in *mapping*."""
     keys, values = [], []
     for logical, value in data.items():
         col = mapping.get(logical)
