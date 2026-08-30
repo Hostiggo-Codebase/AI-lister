@@ -12,8 +12,6 @@ dependencies = [
     "selectolax>=0.3.25",
     "asyncpg>=0.30",
     "anthropic>=0.40",
-    "tenacity>=9.0",
-    "python-dateutil>=2.9",
     "playwright>=1.48",
 ]
 
@@ -31,5 +29,9 @@ packages = ["app", "app.pipeline"]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["FLY002", "RUF059", "S101", "PLR2004"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]

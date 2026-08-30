@@ -1,10 +1,10 @@
-from app.pipeline.ical import parse_ical
+from app.pipeline.coverage import compute_coverage
 from app.pipeline.fx import to_inr
+from app.pipeline.ical import parse_ical
+from app.pipeline.recommendations import build_recommendations
 from app.pipeline.tier1 import parse_html
 from app.pipeline.truncation import detect_truncation
-from app.pipeline.validate import validate_draft, committable_issues
-from app.pipeline.coverage import compute_coverage
-from app.pipeline.recommendations import build_recommendations
+from app.pipeline.validate import committable_issues, validate_draft
 
 FIXTURE_AIRBNB = """<!doctype html><html><head>
 <title>Sunlit Coorg Estate Cottage - Airbnb</title>

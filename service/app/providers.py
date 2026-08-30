@@ -22,7 +22,10 @@ _LISTING_ID: dict[Provider, re.Pattern] = {
 }
 
 _TRACKING = re.compile(
-    r"^(utm_|_|source|ref|adults|children|checkin|checkout|guests|search_mode|federated)", re.IGNORECASE
+    r"^(utm_|_|source_|federated_|previous_page)"
+    r"|^(source|ref|adults|children|infants|pets|check[_-]?in|check[_-]?out|guests"
+    r"|search_mode|modal|unique_share_id|s|c|room_types|category_tag|photo_id|translate_ugc)$",
+    re.IGNORECASE,
 )
 
 PROFILE_HINT = re.compile(

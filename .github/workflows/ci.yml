@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  service:
+    name: import-service (python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: service
+    env:
+      # dummy values so config.Settings() never looks for a real .env
+      DATABASE_URL: ""
+      SUPABASE_URL: https://test.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: test-service-role-key
+      ANTHROPIC_API_KEY: ""
+      IMPORT_TIER2_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check app tests
+
+      - name: Test (pytest)
+        run: pytest -q
+
+  web:
+    name: playground (next build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
