@@ -1,21 +1,16 @@
-FROM python:3.12-slim
+# Playwright's own image already has Chromium + all system libs.
+FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PORT=8000
 WORKDIR /srv
 
-# system deps for Playwright Chromium
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl && rm -rf /var/lib/apt/lists/*
-
-COPY pyproject.toml .
-RUN pip install --upgrade pip && pip install ".[dev]"
-
-# Chromium for the Tier 2 scraper (optional — comment out to shrink the image)
-RUN playwright install --with-deps chromium
-
+COPY pyproject.toml ./
 COPY app ./app
+RUN pip install --upgrade pip && pip install .
+
 COPY sql ./sql
+COPY migrate.py ./
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# shell form so $PORT (set by Render/Railway/Cloud Run) is honoured
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
