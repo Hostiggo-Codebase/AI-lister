@@ -108,7 +108,7 @@ DISCOUNT_COLS: dict[str, str | None] = {
 }
 
 HOUSE_RULE_COLS: dict[str, str | None] = {
-    "id": "id",
+    "id": None,  # 1:1 with listing_id; let the DB default/identity handle it
     "listing_id": "listing_id",
     "check_in_time": "check_in_time",
     "check_out_time": "check_out_time",

@@ -122,22 +122,19 @@ async def _resolve_amenity(conn, slug: str) -> int | None:
     return r["id"] if r else None
 
 
-async def _insert(conn, table: str, mapping: dict, data: dict, pk: str = "id"):
+async def _insert(conn, table: str, mapping: dict, data: dict, pk: str | None = "id"):
+    """Insert one row. `pk=None` (or a mapping whose 'id' is None) -> no RETURNING."""
     keys, values = sm.cols(mapping, data)
     if not keys:
         return None
     ph = ", ".join(f"${i + 1}" for i in range(len(values)))
-    try:
-        row = await conn.fetchrow(
-            f'insert into {sm.t(table)} ({", ".join(keys)}) values ({ph}) returning "{pk}"',
-            *values,
-        )
+    stmt = f'insert into {sm.t(table)} ({", ".join(keys)}) values ({ph})'
+    pk_col = mapping.get(pk) if pk else None
+    if pk_col:
+        row = await conn.fetchrow(f'{stmt} returning "{pk_col}"', *values)
         return row[0] if row else None
-    except Exception:  # noqa: BLE001 — retry without RETURNING for keyless tables
-        await conn.execute(
-            f'insert into {sm.t(table)} ({", ".join(keys)}) values ({ph})', *values
-        )
-        return None
+    await conn.execute(stmt, *values)
+    return None
 
 
 async def publish_draft(record: dict, draft: ListingDraft) -> dict:
@@ -189,7 +186,7 @@ async def publish_draft(record: dict, draft: ListingDraft) -> dict:
         }
         skipped += [f"listings.{f}" for f in sm.unknown_fields(sm.LISTINGS_COLS, listing_data)]
         listing_id = await _insert(
-            conn, sm.TBL_LISTINGS, sm.LISTINGS_COLS, listing_data, pk=sm.LISTINGS_PK
+            conn, sm.TBL_LISTINGS, sm.LISTINGS_COLS, listing_data  # returns listing_id
         )
         if listing_id is None:
             raise RuntimeError("could not insert listing — check schema_map.LISTINGS_COLS")
