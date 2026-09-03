@@ -237,6 +237,10 @@ class AttachIcal(BaseModel):
     url: str
 
 
+class PatchImport(BaseModel):
+    normalized_payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class CommitImport(BaseModel):
     draft: ListingDraft | None = None
     confirm: bool = True

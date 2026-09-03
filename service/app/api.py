@@ -9,15 +9,30 @@ from app.models import (
     CommitImport,
     CreateBatch,
     CreateImport,
+    FxConversion,
     ListingDraft,
+    PatchImport,
     ScanProfile,
 )
+from app.pipeline.coverage import compute_coverage
 from app.pipeline.ical import fetch_ical
 from app.pipeline.orchestrator import run_pipeline
 from app.pipeline.profile import scan_profile
 from app.pipeline.publish import publish_draft
+from app.pipeline.recommendations import build_recommendations
 from app.pipeline.validate import committable_issues, validate_draft
 from app.providers import UrlError, validate_import_url
+
+
+def _deep_merge(base: dict, patch: dict) -> dict:
+    """Recursively merge `patch` into `base`. Lists and scalars are replaced."""
+    out = dict(base)
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
 
 router = APIRouter(prefix="/v1")
 
@@ -88,6 +103,39 @@ async def get_import(import_id: int):
     if not row:
         raise HTTPException(404, "not found")
     return {"import": _record(row)}
+
+
+@router.patch("/imports/{import_id}", dependencies=[Guard])
+async def patch_import(import_id: int, body: PatchImport):
+    """Save host edits to the draft before commit (per review-screen section).
+
+    Body: {"normalized_payload": { ...full or partial ListingDraft... }}
+    Partial objects are deep-merged into the current draft; the result is
+    re-validated and field_coverage / recommendations are recomputed.
+    """
+    row = await jobs.get_import(import_id)
+    if not row:
+        raise HTTPException(404, "not found")
+    if row.get("listing_id"):
+        raise HTTPException(409, "already committed — edit the published listing instead")
+
+    current = row.get("normalized_payload") or {}
+    merged = _deep_merge(current, body.normalized_payload or {})
+    draft, _notes = validate_draft(merged)
+
+    fx_raw = row.get("fx")
+    fx = FxConversion(**fx_raw) if fx_raw else None
+    cov = compute_coverage(draft, fx, bool(row.get("host_confirmed_ownership")))
+    recs = build_recommendations(draft)
+
+    updated = await jobs.update_import(
+        import_id,
+        normalized_payload=draft.model_dump(),
+        field_coverage=cov.model_dump(),
+        recommendations=[r.model_dump() for r in recs],
+        status="needs_review",
+    )
+    return {"import": _record(updated)}
 
 
 @router.post("/imports/{import_id}/rerun", dependencies=[Guard])
