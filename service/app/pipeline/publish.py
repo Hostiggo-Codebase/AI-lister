@@ -13,6 +13,8 @@ import re
 from datetime import time as dtime
 from decimal import Decimal, InvalidOperation
 
+import asyncpg
+
 from app import schema_map as sm
 from app.config import settings
 from app.db import tx
@@ -122,18 +124,38 @@ async def _resolve_amenity(conn, slug: str) -> int | None:
     return r["id"] if r else None
 
 
-async def _insert(conn, table: str, mapping: dict, data: dict, pk: str | None = "id"):
-    """Insert one row. `pk=None` (or a mapping whose 'id' is None) -> no RETURNING."""
-    keys, values = sm.cols(mapping, data)
-    if not keys:
-        return None
-    ph = ", ".join(f"${i + 1}" for i in range(len(values)))
-    stmt = f'insert into {sm.t(table)} ({", ".join(keys)}) values ({ph})'
-    pk_col = mapping.get(pk) if pk else None
-    if pk_col:
-        row = await conn.fetchrow(f'{stmt} returning "{pk_col}"', *values)
-        return row[0] if row else None
-    await conn.execute(stmt, *values)
+_MISSING_COL_RE = re.compile(r'column "([^"]+)" .* does not exist', re.IGNORECASE)
+
+
+async def _insert(conn, table: str, mapping: dict, data: dict, pk: str | None = "id",
+                  _skipped: list | None = None):
+    """Insert one row. Drops columns the DB doesn't have (e.g. sql/004 not applied)
+    and retries, recording them in `_skipped`. `pk` names the logical key whose
+    real column is used for RETURNING; None -> no RETURNING."""
+    data = dict(data)
+    for _ in range(6):
+        keys, values = sm.cols(mapping, data)
+        if not keys:
+            return None
+        ph = ", ".join(f"${i + 1}" for i in range(len(values)))
+        stmt = f'insert into {sm.t(table)} ({", ".join(keys)}) values ({ph})'
+        pk_col = mapping.get(pk) if pk else None
+        try:
+            async with conn.transaction():  # savepoint — a failure here won't abort the outer tx
+                if pk_col:
+                    row = await conn.fetchrow(f'{stmt} returning "{pk_col}"', *values)
+                    return row[0] if row else None
+                await conn.execute(stmt, *values)
+                return None
+        except asyncpg.UndefinedColumnError as e:
+            m = _MISSING_COL_RE.search(str(e))
+            bad = m.group(1) if m else None
+            logical = next((k for k, v in mapping.items() if v == bad), None)
+            if not logical or logical not in data:
+                raise
+            data.pop(logical)
+            if _skipped is not None:
+                _skipped.append(f"{table}.{bad} (column missing — run sql/004)")
     return None
 
 
@@ -186,24 +208,35 @@ async def publish_draft(record: dict, draft: ListingDraft) -> dict:
         }
         skipped += [f"listings.{f}" for f in sm.unknown_fields(sm.LISTINGS_COLS, listing_data)]
         listing_id = await _insert(
-            conn, sm.TBL_LISTINGS, sm.LISTINGS_COLS, listing_data  # returns listing_id
+            conn, sm.TBL_LISTINGS, sm.LISTINGS_COLS, listing_data, _skipped=skipped
         )
         if listing_id is None:
             raise RuntimeError("could not insert listing — check schema_map.LISTINGS_COLS")
 
-        # media
-        for i, p in enumerate(record.get("mirrored_photos") or []):
-            if p.get("status") != "mirrored" or not p.get("public_url"):
-                continue
-            await _insert(conn, sm.TBL_MEDIA, sm.MEDIA_COLS, {
-                "listing_id": listing_id,
-                "media_url": p["public_url"],
-                "media_type": "image",
-                "is_cover": i == 0,
-                "source": "airbnb_import",
-                "source_url": p.get("original_url"),
-                "import_id": record["import_id"],
-            })
+        # media  (uses import.mirrored_photos -> the re-hosted Supabase URLs)
+        photos = [
+            p for p in (record.get("mirrored_photos") or [])
+            if p.get("status") == "mirrored" and p.get("public_url")
+        ]
+        media_ok = 0
+        for i, p in enumerate(photos):
+            try:
+                await _insert(conn, sm.TBL_MEDIA, sm.MEDIA_COLS, {
+                    "listing_id": listing_id,
+                    "media_url": p["public_url"],
+                    "media_type": "image",
+                    "is_cover": i == 0,
+                    "source": "airbnb_import",
+                    "source_url": p.get("original_url"),
+                    "import_id": record["import_id"],
+                }, _skipped=skipped)
+                media_ok += 1
+            except Exception as e:  # noqa: BLE001 — one bad photo shouldn't fail the listing
+                log.warning("media insert failed for listing %s photo %s: %s", listing_id, i, e)
+        log.info("import %s -> listing %s: %d/%d photos written to listing_media",
+                 record["import_id"], listing_id, media_ok, len(photos))
+        if photos and media_ok == 0:
+            skipped.append(f"listing_media: 0/{len(photos)} photos written (see logs)")
 
         # per-bedroom breakdown (all columns NOT NULL)
         bd = draft.capacity.bedroom_breakdown or []
